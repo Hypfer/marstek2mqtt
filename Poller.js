@@ -87,7 +87,7 @@ class Poller {
         data.internal_temperature = temp.readInt16BE(0) * 0.1;
         data.internal_mos1_temperature = temp.readInt16BE(2) * 0.1;
         data.internal_mos2_temperature = temp.readInt16BE(4) * 0.1;
-        
+
         const temp2 = await this.readBlock(35010, 2);
         data.max_cell_temperature = temp2.readInt16BE(0) * 0.1;
         data.min_cell_temperature = temp2.readInt16BE(0) * 0.1;
@@ -95,6 +95,21 @@ class Poller {
         const state = await this.readBlock(35100, 1);
         data.inverter_state = state.readUInt16BE(0);
         
+
+        const backup = await this.readBlock(41200, 1);
+        data.backup_function = backup.readUInt16BE(0);
+        
+        const ctrl1 = await this.readBlock(42010, 2);
+        data.force_mode    = ctrl1.readUInt16BE(0);
+        data.charge_to_soc = ctrl1.readUInt16BE(2);
+
+        const ctrl2 = await this.readBlock(42020, 2);
+        data.set_charge_power    = ctrl2.readUInt16BE(0);
+        data.set_discharge_power = ctrl2.readUInt16BE(2);
+        
+        const work = await this.readBlock(43000, 1);
+        data.user_work_mode = work.readUInt16BE(0);
+
         this.emitData(data);
     }
 
@@ -119,5 +134,32 @@ class Poller {
 }
 
 Poller.EVENTS = { Data: "Data" };
+
+Poller.CONTROLS = {
+    "user_work_mode": {
+        register: 43000,
+        type: "select",
+        map: { 0: "Manual", 1: "Anti-Feed", 2: "Trade" }
+    },
+    "force_mode": {
+        register: 42010,
+        type: "select",
+        map: { 0: "Stop", 1: "Charge", 2: "Discharge" }
+    },
+    "backup_function": {
+        register: 41200,
+        type: "select",
+        map: { 0: "Enable", 1: "Disable" }
+    },
+    "set_charge_power": { register: 42020, type: "number" },
+    "set_discharge_power": { register: 42021, type: "number" },
+    "charge_to_soc": { register: 42011, type: "number" }
+};
+
+Poller.READ_ONLY_LOOKUPS = {
+    "inverter_state": {
+        map: { 0: "Sleep", 1: "Standby", 2: "Charge", 3: "Discharge", 4: "Backup", 5: "OTA", 6: "Bypass" }
+    }
+};
 
 module.exports = Poller;

@@ -53,41 +53,37 @@ class MqttClient {
 
             const key = parts[3];
             let value = message.toString();
+            const controls = this.poller.constructor.CONTROLS;
 
             Logger.info(`Received command for ${key}: ${value}`);
-            
-            if (MqttClient.LOOKUP_TABLES[key]) {
-                const mapping = MqttClient.LOOKUP_TABLES[key];
 
-                if (mapping.register === undefined) {
-                    Logger.warn(`${key} is read-only`);
-                    return;
-                }
-                
-                const intVal = Object.keys(mapping.map).find(k => mapping.map[k] === value);
+            if (!controls[key]) {
+                Logger.warn(`Unknown control key: ${key}`);
+                return;
+            }
+
+            const control = controls[key];
+
+            if (control.type === "select") {
+                const intVal = Object.keys(control.map).find(k => control.map[k] === value);
 
                 if (intVal !== undefined) {
-                    this.writeToDevice(mapping.register, parseInt(intVal));
-                    return;
+                    this.writeToDevice(control.register, parseInt(intVal));
                 } else {
-                    Logger.warn(`Invalid option string '${value}' for ${key}. Expected: ${Object.values(mapping.map).join(", ")}`);
-                    return;
+                    Logger.warn(`Invalid option '${value}' for ${key}. Expected: ${Object.values(control.map).join(", ")}`);
                 }
+                return;
             }
-            
-            if (MqttClient.NUMBER_CONTROLS[key]) {
-                const mapping = MqttClient.NUMBER_CONTROLS[key];
-                const intVal = parseInt(value, 10);
 
+            if (control.type === "number") {
+                const intVal = parseInt(value, 10);
                 if (isNaN(intVal)) {
                     Logger.warn(`Invalid number '${value}' for ${key}`);
                     return;
                 }
-                this.writeToDevice(mapping.register, intVal);
-                return;
+                
+                this.writeToDevice(control.register, intVal);
             }
-
-            Logger.warn(`Unknown control key: ${key}`);
 
         } catch (e) {
             Logger.error("Error processing command", e);
@@ -103,12 +99,22 @@ class MqttClient {
     handleData(data) {
         this.ensureAutoconf(this.identifier);
         const baseTopic = `${MqttClient.TOPIC_PREFIX}/${this.identifier}`;
+        const controls = this.poller.constructor.CONTROLS;
+        const readOnly = this.poller.constructor.READ_ONLY_LOOKUPS;
 
         Object.entries(data).forEach(([key, value]) => {
             let payload = value;
             
-            if (MqttClient.LOOKUP_TABLES[key]) {
-                const map = MqttClient.LOOKUP_TABLES[key].map;
+            if (controls[key] && controls[key].type === "select") {
+                const map = controls[key].map;
+                if (map[value] !== undefined) {
+                    payload = map[value];
+                } else {
+                    Logger.warn(`Value ${value} for ${key} not found in control map`);
+                }
+            }
+            else if (readOnly[key]) {
+                const map = readOnly[key].map;
                 if (map[value] !== undefined) {
                     payload = map[value];
                 } else {
@@ -153,9 +159,10 @@ class MqttClient {
                 if (options.min !== undefined) payload["min"] = options.min;
                 if (options.max !== undefined) payload["max"] = options.max;
                 if (options.step) payload["step"] = options.step;
-                
-                if (type === "select" && MqttClient.LOOKUP_TABLES[key]) {
-                    payload["options"] = Object.values(MqttClient.LOOKUP_TABLES[key].map);
+
+                const controls = this.poller.constructor.CONTROLS;
+                if (type === "select" && controls[key] && controls[key].map) {
+                    payload["options"] = Object.values(controls[key].map);
                 }
 
                 if (unit) payload["unit_of_measurement"] = unit;
@@ -163,7 +170,7 @@ class MqttClient {
 
             this.client.publish(discoveryTopic, JSON.stringify(payload), { retain: true });
         };
-        
+
         makeConfig("ac_power", "AC Power", "W", "power", "measurement");
         makeConfig("battery_power", "Battery Power", "W", "power", "measurement");
         makeConfig("battery_voltage", "Battery Voltage", "V", "voltage", "measurement");
@@ -172,17 +179,17 @@ class MqttClient {
         makeConfig("ac_current", "AC Current", "A", "current", "measurement");
         makeConfig("ac_frequency", "AC Frequency", "Hz", "frequency", "measurement");
         makeConfig("soc", "State of Charge", "%", "battery", "measurement");
-        
+
         makeConfig("total_charging_energy", "Total Charge", "kWh", "energy", "total_increasing");
         makeConfig("total_discharging_energy", "Total Discharge", "kWh", "energy", "total_increasing");
         makeConfig("internal_temperature", "Internal Temp", "°C", "temperature", "measurement");
-        
+
         makeConfig("inverter_state", "Inverter State", null, null, null, "sensor");
-        
+
         makeConfig("set_charge_power", "Set Charge Power", "W", null, null, "number", {min: 0, max: 2500, step: 50});
         makeConfig("set_discharge_power", "Set Discharge Power", "W", null, null, "number", {min: 0, max: 2500, step: 50});
         makeConfig("charge_to_soc", "Charge to SOC", "%", null, null, "number", {min: 10, max: 100, step: 1});
-        
+
         makeConfig("user_work_mode", "User Work Mode", null, null, null, "select");
         makeConfig("force_mode", "Force Mode", null, null, null, "select");
         makeConfig("backup_function", "Backup Function", null, null, null, "select");
@@ -192,30 +199,5 @@ class MqttClient {
 }
 
 MqttClient.TOPIC_PREFIX = "marstek2mqtt";
-
-MqttClient.LOOKUP_TABLES = { // FIXME: why are the registers here? They don't belong here
-    "user_work_mode": {
-        register: 43000,
-        map: { 0: "Manual", 1: "Anti-Feed", 2: "Trade" }
-    },
-    "force_mode": {
-        register: 42010,
-        map: { 0: "Stop", 1: "Charge", 2: "Discharge" }
-    },
-    "backup_function": {
-        register: 41200,
-        map: { 0: "Enable", 1: "Disable" }
-    },
-    "inverter_state": {
-        // Read-only map used for publishing
-        map: { 0: "Sleep", 1: "Standby", 2: "Charge", 3: "Discharge", 4: "Backup", 5: "OTA", 6: "Bypass" }
-    }
-};
-
-MqttClient.NUMBER_CONTROLS = {
-    "set_charge_power": { register: 42020 },
-    "set_discharge_power": { register: 42021 },
-    "charge_to_soc": { register: 42011 }
-};
 
 module.exports = MqttClient;
