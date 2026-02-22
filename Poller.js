@@ -136,7 +136,7 @@ Poller.CONTROLS = {
     "user_work_mode": {
         register: 43000,
         type: "select",
-        map: { 0: "Manual", 1: "Anti-Feed", 2: "Trade" }
+        map: { 0: "Manual", 1: "Self Consumption", 2: "Trade" }
     },
     "force_mode": {
         register: 42010,
