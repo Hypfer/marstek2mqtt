@@ -68,6 +68,8 @@ class Poller {
         const bat = await this.readBlock(30100, 2);
         data.battery_voltage = bat.readUInt16BE(0) * 0.01;
         data.battery_current = bat.readInt16BE(2) * 0.1;
+        
+        data.battery_design_capacity = (await this.readBlock(32105, 1)).readUInt16BE(0) * 0.001;
 
         const ac = await this.readBlock(32200, 5);
         data.ac_voltage   = ac.readUInt16BE(0) * 0.1;
@@ -80,8 +82,8 @@ class Poller {
         data.min_cell_voltage   = soc.readUInt16BE(8) * 0.001; // TODO assumption
 
         const nrg = await this.readBlock(33000, 4);
-        data.total_charging_energy    = nrg.readUInt32BE(0) * 0.01;
-        data.total_discharging_energy = nrg.readInt32BE(4) * 0.01;
+        data.total_energy_in    = nrg.readUInt32BE(0) * 0.01;
+        data.total_energy_out = nrg.readInt32BE(4) * 0.01;
 
         const temp = await this.readBlock(35000, 3);
         data.internal_temperature = temp.readInt16BE(0) * 0.1;
@@ -92,12 +94,8 @@ class Poller {
         data.max_cell_temperature = temp2.readInt16BE(0) * 0.1;
         data.min_cell_temperature = temp2.readInt16BE(0) * 0.1;
 
-        const state = await this.readBlock(35100, 1);
-        data.inverter_state = state.readUInt16BE(0);
-        
-
-        const backup = await this.readBlock(41200, 1);
-        data.backup_function = backup.readUInt16BE(0);
+        data.inverter_state = (await this.readBlock(35100, 1)).readUInt16BE(0);
+        data.backup_function = (await this.readBlock(41200, 1)).readUInt16BE(0);
         
         const ctrl1 = await this.readBlock(42010, 2);
         data.force_mode    = ctrl1.readUInt16BE(0);
@@ -106,9 +104,8 @@ class Poller {
         const ctrl2 = await this.readBlock(42020, 2);
         data.set_charge_power    = ctrl2.readUInt16BE(0);
         data.set_discharge_power = ctrl2.readUInt16BE(2);
-        
-        const work = await this.readBlock(43000, 1);
-        data.user_work_mode = work.readUInt16BE(0);
+
+        data.user_work_mode = (await this.readBlock(43000, 1)).readUInt16BE(0);
 
         this.emitData(data);
     }

@@ -180,8 +180,8 @@ class MqttClient {
         makeConfig("ac_frequency", "AC Frequency", "Hz", "frequency", "measurement");
         makeConfig("soc", "State of Charge", "%", "battery", "measurement");
 
-        makeConfig("total_charging_energy", "Total Charge", "kWh", "energy", "total_increasing");
-        makeConfig("total_discharging_energy", "Total Discharge", "kWh", "energy", "total_increasing");
+        makeConfig("total_energy_in", "Total Energy In", "kWh", "energy", "total_increasing");
+        makeConfig("total_energy_out", "Total Energy Out", "kWh", "energy", "total_increasing");
         makeConfig("internal_temperature", "Internal Temp", "°C", "temperature", "measurement");
 
         makeConfig("inverter_state", "Inverter State", null, null, null, "sensor");
