@@ -2,6 +2,14 @@ const EventEmitter = require("events").EventEmitter;
 const ModbusRTU = require("modbus-serial");
 const Logger = require("./Logger");
 
+/**
+ * Not implemented and not validated so far:
+ * - Device Info: 31000 (Name), 30200-30204 (EMS/VMS/BMS Firmware), 30350 (Comm Firmware)
+ * - Network Data: 30304 (MAC), 30300 (WiFi Status), 30303 (WiFi Signal), 30302 (Cloud Status)
+ * - Daily/Monthly Accumulators: 33004 - 33010 (Charging/Discharging totals)
+ * - Schedules (1-6): 43100 - 43129 (Days, Start, End, Mode, Enabled)
+ */
+
 class Poller {
     constructor() {
         this.eventEmitter = new EventEmitter();
@@ -69,20 +77,28 @@ class Poller {
         data.battery_voltage = bat.readUInt16BE(0) * 0.01;
         data.battery_current = bat.readInt16BE(2) * 0.1;
         
-        data.battery_design_capacity = (await this.readBlock(32105, 1)).readUInt16BE(0) * 0.001;
+        const bat_global = await this.readBlock(32104, 6);
+        data.soc = bat_global.readUInt16BE(0);
+        data.battery_design_capacity = bat_global.readUInt16BE(2) * 0.001;
+        const moduleCount = bat_global.readUInt16BE(10);
 
         const ac = await this.readBlock(32200, 5);
         data.ac_voltage   = ac.readUInt16BE(0) * 0.1;
         data.ac_frequency = ac.readInt16BE(8) * 0.1;
 
-        const soc = await this.readBlock(37004, 5);
-        data.ac_current = soc.readInt16BE(0) * 0.004; // TODO why 0.004??
-        data.soc        = soc.readUInt16BE(2);
-        data.max_cell_voltage   = soc.readUInt16BE(6) * 0.001; // TODO assumption
-        data.min_cell_voltage   = soc.readUInt16BE(8) * 0.001; // TODO assumption
+        // FIXME: Validate. Does this require a minimum firmware version or is it just invalid?
+        // const offgrid = await this.readBlock(32300, 4);
+        // data.ac_offgrid_voltage = offgrid.readUInt16BE(0) * 0.1;
+        // data.ac_offgrid_current = offgrid.readUInt16BE(2) * 0.01;
+        // data.ac_offgrid_power   = offgrid.readInt32BE(4);
+
+        const soc_block = await this.readBlock(37004, 5);
+        data.ac_current = soc_block.readInt16BE(0) * 0.004;
+        data.max_cell_voltage   = soc_block.readUInt16BE(6) * 0.001;
+        data.min_cell_voltage   = soc_block.readUInt16BE(8) * 0.001;
 
         const nrg = await this.readBlock(33000, 4);
-        data.total_energy_in    = nrg.readUInt32BE(0) * 0.01;
+        data.total_energy_in  = nrg.readUInt32BE(0) * 0.01;
         data.total_energy_out = nrg.readInt32BE(4) * 0.01;
 
         const temp = await this.readBlock(35000, 3);
@@ -92,11 +108,11 @@ class Poller {
 
         const temp2 = await this.readBlock(35010, 2);
         data.max_cell_temperature = temp2.readInt16BE(0) * 0.1;
-        data.min_cell_temperature = temp2.readInt16BE(0) * 0.1;
+        data.min_cell_temperature = temp2.readInt16BE(2) * 0.1;
 
         data.inverter_state = (await this.readBlock(35100, 1)).readUInt16BE(0);
         data.backup_function = (await this.readBlock(41200, 1)).readUInt16BE(0);
-        
+
         const ctrl1 = await this.readBlock(42010, 2);
         data.force_mode    = ctrl1.readUInt16BE(0);
         data.charge_to_soc = ctrl1.readUInt16BE(2);
@@ -106,6 +122,47 @@ class Poller {
         data.set_discharge_power = ctrl2.readUInt16BE(2);
 
         data.user_work_mode = (await this.readBlock(43000, 1)).readUInt16BE(0);
+        data.rs485_control_mode = (await this.readBlock(42000, 1)).readUInt16BE(0);
+
+        const mppt = await this.readBlock(30020, 21);
+        for (let i = 1; i <= 4; i++) {
+            data[`mppt${i}_voltage`] = mppt.readUInt16BE((i - 1) * 2) * 0.1;
+            data[`mppt${i}_current`] = mppt.readUInt16BE((4 + (i - 1)) * 2) * 0.1;
+            data[`mppt${i}_power`]   = mppt.readUInt16BE((17 + (i - 1)) * 2) * 0.1;
+        }
+
+        let totalHighResSoc = 0;
+        let validModules = 0;
+
+        for (let i = 1; i <= moduleCount; i++) {
+            try {
+                let base = 34000 + (i - 1) * 100;
+                const modSoc = await this.readBlock(base + 2, 1);
+                const highResSoc = modSoc.readUInt16BE(0) * 0.1;
+
+                data[`battery_${i}_soc`] = highResSoc;
+
+                totalHighResSoc += highResSoc;
+                validModules++;
+
+                const modCells = await this.readBlock(base + 18, 13);
+                for (let c = 1; c <= 13; c++) {
+                    data[`battery_${i}_cell_${c}_voltage`] = modCells.readInt16BE((c - 1) * 2) * 0.001;
+                }
+            } catch (err) {
+                Logger.warn(`Failed to read module ${i} despite module count reporting ${moduleCount}`);
+                break;
+            }
+        }
+        
+        if (validModules > 0) {
+            const avgSoc = totalHighResSoc / validModules;
+            data.remaining_energy = (avgSoc / 100) * data.battery_design_capacity;
+
+            data.soc = avgSoc;
+        } else {
+            data.remaining_energy = (data.soc / 100) * data.battery_design_capacity;
+        }
 
         this.emitData(data);
     }
@@ -133,24 +190,15 @@ class Poller {
 Poller.EVENTS = { Data: "Data" };
 
 Poller.CONTROLS = {
-    "user_work_mode": {
-        register: 43000,
-        type: "select",
-        map: { 0: "Manual", 1: "Self Consumption", 2: "Trade" }
-    },
-    "force_mode": {
-        register: 42010,
-        type: "select",
-        map: { 0: "Stop", 1: "Charge", 2: "Discharge" }
-    },
-    "backup_function": {
-        register: 41200,
-        type: "select",
-        map: { 0: "Enable", 1: "Disable" }
-    },
+    "user_work_mode": { register: 43000, type: "select", map: { 0: "Manual", 1: "Self Consumption", 2: "Trade" } },
+    "force_mode": { register: 42010, type: "select", map: { 0: "Stop", 1: "Charge", 2: "Discharge" } },
+    "backup_function": { register: 41200, type: "switch", on: 0, off: 1 },
+    "rs485_control_mode": { register: 42000, type: "switch", on: 21930, off: 21947 },
     "set_charge_power": { register: 42020, type: "number" },
     "set_discharge_power": { register: 42021, type: "number" },
-    "charge_to_soc": { register: 42011, type: "number" }
+    "charge_to_soc": { register: 42011, type: "number" },
+    "reset_device": { register: 41000, type: "button", command: 21930 },
+    "factory_reset": { register: 41001, type: "button", command: 21930 }
 };
 
 Poller.READ_ONLY_LOOKUPS = {

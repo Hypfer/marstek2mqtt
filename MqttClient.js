@@ -75,13 +75,33 @@ class MqttClient {
                 return;
             }
 
+            if (control.type === "switch") {
+                if (value === "ON") {
+                    this.writeToDevice(control.register, control.on);
+                } else if (value === "OFF") {
+                    this.writeToDevice(control.register, control.off);
+                } else {
+                    Logger.warn(`Invalid value '${value}' for switch ${key}. Expected: ON, OFF`);
+                }
+                return;
+            }
+
+            if (control.type === "button") {
+                if (value === "PRESS") {
+                    this.writeToDevice(control.register, control.command);
+                } else {
+                    Logger.warn(`Invalid value '${value}' for button ${key}. Expected: PRESS`);
+                }
+                return;
+            }
+
             if (control.type === "number") {
                 const intVal = parseInt(value, 10);
                 if (isNaN(intVal)) {
                     Logger.warn(`Invalid number '${value}' for ${key}`);
                     return;
                 }
-                
+
                 this.writeToDevice(control.register, intVal);
             }
 
@@ -104,16 +124,23 @@ class MqttClient {
 
         Object.entries(data).forEach(([key, value]) => {
             let payload = value;
-            
-            if (controls[key] && controls[key].type === "select") {
-                const map = controls[key].map;
-                if (map[value] !== undefined) {
-                    payload = map[value];
-                } else {
-                    Logger.warn(`Value ${value} for ${key} not found in control map`);
+
+            if (controls[key]) {
+                if (controls[key].type === "button") return;
+
+                if (controls[key].type === "select") {
+                    const map = controls[key].map;
+                    if (map[value] !== undefined) {
+                        payload = map[value];
+                    } else {
+                        Logger.warn(`Value ${value} for ${key} not found in control map`);
+                    }
+                } else if (controls[key].type === "switch") {
+                    if (value === controls[key].on) payload = "ON";
+                    else if (value === controls[key].off) payload = "OFF";
+                    else payload = "UNKNOWN";
                 }
-            }
-            else if (readOnly[key]) {
+            } else if (readOnly[key]) {
                 const map = readOnly[key].map;
                 if (map[value] !== undefined) {
                     payload = map[value];
@@ -141,18 +168,25 @@ class MqttClient {
 
         const makeConfig = (key, name, unit, devClass, stateClass, type = "sensor", options = {}) => {
             const discoveryTopic = `homeassistant/${type}/marstek2mqtt_${identifier}/${key}/config`;
+            const enabledByDefault = options.enabled_by_default !== false;
+
             const payload = {
                 "name": name,
                 "unique_id": `marstek2mqtt_${identifier}_${key}`,
                 "state_topic": `${MqttClient.TOPIC_PREFIX}/${identifier}/${key}`,
                 "device": device,
-                "enabled_by_default": true
+                "enabled_by_default": enabledByDefault
             };
 
             if (type === "sensor") {
-                if(unit) payload["unit_of_measurement"] = unit;
-                if(devClass) payload["device_class"] = devClass;
-                if(stateClass) payload["state_class"] = stateClass;
+                if (unit) payload["unit_of_measurement"] = unit;
+                if (devClass) payload["device_class"] = devClass;
+                if (stateClass) payload["state_class"] = stateClass;
+
+                if (options.precision !== undefined) {
+                    payload["suggested_display_precision"] = options.precision;
+                }
+
                 payload["expire_after"] = Math.ceil((parseInt(process.env.POLL_INTERVAL) || 5000) / 1000) * 2 + 5;
             } else {
                 payload["command_topic"] = `${MqttClient.TOPIC_PREFIX}/${identifier}/set/${key}`;
@@ -165,34 +199,65 @@ class MqttClient {
                     payload["options"] = Object.values(controls[key].map);
                 }
 
+                if (type === "button") {
+                    delete payload["state_topic"];
+                }
+
                 if (unit) payload["unit_of_measurement"] = unit;
             }
 
             this.client.publish(discoveryTopic, JSON.stringify(payload), { retain: true });
         };
 
-        makeConfig("ac_power", "AC Power", "W", "power", "measurement");
-        makeConfig("battery_power", "Battery Power", "W", "power", "measurement");
-        makeConfig("battery_voltage", "Battery Voltage", "V", "voltage", "measurement");
-        makeConfig("battery_current", "Battery Current", "A", "current", "measurement");
-        makeConfig("ac_voltage", "AC Voltage", "V", "voltage", "measurement");
-        makeConfig("ac_current", "AC Current", "A", "current", "measurement");
-        makeConfig("ac_frequency", "AC Frequency", "Hz", "frequency", "measurement");
-        makeConfig("soc", "State of Charge", "%", "battery", "measurement");
+        makeConfig("ac_power", "AC Power", "W", "power", "measurement", "sensor", { precision: 0 });
+        makeConfig("battery_power", "Battery Power", "W", "power", "measurement", "sensor", { precision: 0 });
+        makeConfig("battery_voltage", "Battery Voltage", "V", "voltage", "measurement", "sensor", { precision: 3 });
+        makeConfig("battery_current", "Battery Current", "A", "current", "measurement", "sensor", { precision: 3 });
+        makeConfig("ac_voltage", "AC Voltage", "V", "voltage", "measurement", "sensor", { precision: 3 });
+        makeConfig("ac_current", "AC Current", "A", "current", "measurement", "sensor", { precision: 3 });
+        makeConfig("ac_frequency", "AC Frequency", "Hz", "frequency", "measurement", "sensor", { precision: 2 });
+        makeConfig("soc", "State of Charge", "%", "battery", "measurement", "sensor", { precision: 2 });
+        makeConfig("battery_design_capacity", "Design Capacity", "kWh", null,"measurement", "sensor", { precision: 3, enabled_by_default: false });
+        makeConfig("remaining_energy", "Remaining Energy", "kWh", "energy_storage", "measurement", "sensor", { precision: 2 });
 
-        makeConfig("total_energy_in", "Total Energy In", "kWh", "energy", "total_increasing");
-        makeConfig("total_energy_out", "Total Energy Out", "kWh", "energy", "total_increasing");
-        makeConfig("internal_temperature", "Internal Temp", "°C", "temperature", "measurement");
+        makeConfig("total_energy_in", "Total Energy In", "kWh", "energy", "total_increasing", "sensor", { precision: 3 });
+        makeConfig("total_energy_out", "Total Energy Out", "kWh", "energy", "total_increasing", "sensor", { precision: 3 });
+
+        makeConfig("internal_temperature", "Internal Temp", "°C", "temperature", "measurement", "sensor", { precision: 1 });
+        makeConfig("internal_mos1_temperature", "Internal MOS1 Temp", "°C", "temperature", "measurement", "sensor", { precision: 1 });
+        makeConfig("internal_mos2_temperature", "Internal MOS2 Temp", "°C", "temperature", "measurement", "sensor", { precision: 1 });
+        makeConfig("max_cell_temperature", "Max Cell Temp", "°C", "temperature", "measurement", "sensor", { precision: 1 });
+        makeConfig("min_cell_temperature", "Min Cell Temp", "°C", "temperature", "measurement", "sensor", { precision: 1 });
+
+        makeConfig("max_cell_voltage", "Max Cell Voltage", "V", "voltage", "measurement", "sensor", { precision: 3 });
+        makeConfig("min_cell_voltage", "Min Cell Voltage", "V", "voltage", "measurement", "sensor", { precision: 3 });
+
+        for (let i = 1; i <= 4; i++) {
+            makeConfig(`mppt${i}_voltage`, `MPPT ${i} Voltage`, "V", "voltage", "measurement", "sensor", { precision: 3 });
+            makeConfig(`mppt${i}_current`, `MPPT ${i} Current`, "A", "current", "measurement", "sensor", { precision: 3 });
+            makeConfig(`mppt${i}_power`, `MPPT ${i} Power`, "W", "power", "measurement", "sensor", { precision: 0 });
+        }
+        
+        for (let b = 1; b <= 6; b++) {
+            makeConfig(`battery_${b}_soc`, `Battery ${b} SOC`, "%", "battery", "measurement", "sensor", { precision: 2 });
+            for (let c = 1; c <= 13; c++) {
+                makeConfig(`battery_${b}_cell_${c}_voltage`, `Battery ${b} Cell ${c} Voltage`, "V", "voltage", "measurement", "sensor", { precision: 3, enabled_by_default: false });
+            }
+        }
 
         makeConfig("inverter_state", "Inverter State", null, null, null, "sensor");
-
-        makeConfig("set_charge_power", "Set Charge Power", "W", null, null, "number", {min: 0, max: 2500, step: 50});
-        makeConfig("set_discharge_power", "Set Discharge Power", "W", null, null, "number", {min: 0, max: 2500, step: 50});
-        makeConfig("charge_to_soc", "Charge to SOC", "%", null, null, "number", {min: 10, max: 100, step: 1});
+        
+        makeConfig("set_charge_power", "Set Charge Power", "W", null, null, "number", { min: 0, max: 2500, step: 50, enabled_by_default: false });
+        makeConfig("set_discharge_power", "Set Discharge Power", "W", null, null, "number", { min: 0, max: 2500, step: 50, enabled_by_default: false });makeConfig("charge_to_soc", "Charge to SOC", "%", null, null, "number", { min: 10, max: 100, step: 1, enabled_by_default: false });
 
         makeConfig("user_work_mode", "User Work Mode", null, null, null, "select");
-        makeConfig("force_mode", "Force Mode", null, null, null, "select");
-        makeConfig("backup_function", "Backup Function", null, null, null, "select");
+        makeConfig("force_mode", "Force Mode", null, null, null, "select", {enabled_by_default: false});
+
+        makeConfig("backup_function", "Backup Function", null, null, null, "switch");
+        makeConfig("rs485_control_mode", "RS485 Control Mode", null, null, null, "switch", { enabled_by_default: false });
+
+        makeConfig("reset_device", "Reset Device", null, null, null, "button", { enabled_by_default: false });
+        makeConfig("factory_reset", "Factory Reset", null, null, null, "button", { enabled_by_default: false });
 
         this.autoconfTimestamp = Date.now();
     }
