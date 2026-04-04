@@ -178,6 +178,10 @@ class MqttClient {
                 "enabled_by_default": enabledByDefault
             };
 
+            if (options.entity_category) {
+                payload["entity_category"] = options.entity_category;
+            }
+
             if (type === "sensor") {
                 if (unit) payload["unit_of_measurement"] = unit;
                 if (devClass) payload["device_class"] = devClass;
@@ -229,26 +233,27 @@ class MqttClient {
         makeConfig("max_cell_temperature", "Max Cell Temp", "°C", "temperature", "measurement", "sensor", { precision: 1 });
         makeConfig("min_cell_temperature", "Min Cell Temp", "°C", "temperature", "measurement", "sensor", { precision: 1 });
 
-        makeConfig("max_cell_voltage", "Max Cell Voltage", "V", "voltage", "measurement", "sensor", { precision: 3 });
-        makeConfig("min_cell_voltage", "Min Cell Voltage", "V", "voltage", "measurement", "sensor", { precision: 3 });
+        makeConfig("max_cell_voltage", "Max Cell Voltage", "V", "voltage", "measurement", "sensor", { precision: 3, entity_category: "diagnostic" });
+        makeConfig("min_cell_voltage", "Min Cell Voltage", "V", "voltage", "measurement", "sensor", { precision: 3, entity_category: "diagnostic" });
 
         for (let i = 1; i <= 4; i++) {
             makeConfig(`mppt${i}_voltage`, `MPPT ${i} Voltage`, "V", "voltage", "measurement", "sensor", { precision: 3 });
             makeConfig(`mppt${i}_current`, `MPPT ${i} Current`, "A", "current", "measurement", "sensor", { precision: 3 });
             makeConfig(`mppt${i}_power`, `MPPT ${i} Power`, "W", "power", "measurement", "sensor", { precision: 0 });
         }
-        
+
         for (let b = 1; b <= 6; b++) {
             makeConfig(`battery_${b}_soc`, `Battery ${b} SOC`, "%", "battery", "measurement", "sensor", { precision: 2 });
             for (let c = 1; c <= 13; c++) {
-                makeConfig(`battery_${b}_cell_${c}_voltage`, `Battery ${b} Cell ${c} Voltage`, "V", "voltage", "measurement", "sensor", { precision: 3, enabled_by_default: false });
+                makeConfig(`battery_${b}_cell_${c}_voltage`, `Battery ${b} Cell ${c} Voltage`, "V", "voltage", "measurement", "sensor", { precision: 3, enabled_by_default: false, entity_category: "diagnostic" });
             }
         }
 
         makeConfig("inverter_state", "Inverter State", null, null, null, "sensor");
-        
+
         makeConfig("set_charge_power", "Set Charge Power", "W", null, null, "number", { min: 0, max: 2500, step: 50, enabled_by_default: false });
-        makeConfig("set_discharge_power", "Set Discharge Power", "W", null, null, "number", { min: 0, max: 2500, step: 50, enabled_by_default: false });makeConfig("charge_to_soc", "Charge to SOC", "%", null, null, "number", { min: 10, max: 100, step: 1, enabled_by_default: false });
+        makeConfig("set_discharge_power", "Set Discharge Power", "W", null, null, "number", { min: 0, max: 2500, step: 50, enabled_by_default: false });
+        makeConfig("charge_to_soc", "Charge to SOC", "%", null, null, "number", { min: 10, max: 100, step: 1, enabled_by_default: false });
 
         makeConfig("user_work_mode", "User Work Mode", null, null, null, "select");
         makeConfig("force_mode", "Force Mode", null, null, null, "select", {enabled_by_default: false});
