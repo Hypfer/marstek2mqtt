@@ -15,6 +15,9 @@ class Poller {
         this.eventEmitter = new EventEmitter();
         this.client = new ModbusRTU();
         this.connected = false;
+
+        this.energyInOffset = parseFloat(process.env.ENERGY_IN_OFFSET) || 0;
+        this.energyOutOffset = parseFloat(process.env.ENERGY_OUT_OFFSET) || 0;
     }
 
     async initialize() {
@@ -28,6 +31,9 @@ class Poller {
         const slaveId = Number(process.env.SLAVE_ID) || 1;
 
         Logger.info(`Initializing Poller: ${process.env.POLL_IP}:${port} ID:${slaveId} Interval:${interval}ms`);
+        if (this.energyInOffset !== 0 || this.energyOutOffset !== 0) {
+            Logger.info(`Using Energy Offsets - In: ${this.energyInOffset} kWh, Out: ${this.energyOutOffset} kWh`);
+        }
 
         const connect = async () => {
             try {
@@ -76,7 +82,7 @@ class Poller {
         const bat = await this.readBlock(30100, 2);
         data.battery_voltage = bat.readUInt16BE(0) * 0.01;
         data.battery_current = bat.readInt16BE(2) * 0.1;
-        
+
         const bat_global = await this.readBlock(32104, 6);
         data.soc = bat_global.readUInt16BE(0);
         data.battery_design_capacity = bat_global.readUInt16BE(2) * 0.001;
@@ -98,8 +104,8 @@ class Poller {
         data.min_cell_voltage   = soc_block.readUInt16BE(8) * 0.001;
 
         const nrg = await this.readBlock(33000, 4);
-        data.total_energy_in  = nrg.readUInt32BE(0) * 0.01;
-        data.total_energy_out = nrg.readInt32BE(4) * 0.01;
+        data.total_energy_in  = (nrg.readUInt32BE(0) * 0.01) + this.energyInOffset;
+        data.total_energy_out = (nrg.readInt32BE(4) * 0.01) + this.energyOutOffset;
 
         const temp = await this.readBlock(35000, 3);
         data.internal_temperature = temp.readInt16BE(0) * 0.1;
@@ -154,7 +160,7 @@ class Poller {
                 break;
             }
         }
-        
+
         if (validModules > 0) {
             const avgSoc = totalHighResSoc / validModules;
             data.remaining_energy = (avgSoc / 100) * data.battery_design_capacity;
